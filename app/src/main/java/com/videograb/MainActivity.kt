@@ -7,8 +7,10 @@ import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -22,12 +24,14 @@ import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
@@ -40,12 +44,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.DateFormat
+import java.util.Date
 
 class MainActivity : AppCompatActivity() {
 
     companion object {
         var cachedUrl: String? = null
         var cachedMeta: VideoMeta? = null
+        var lastTab = 0
     }
 
     private var bgC = 0
@@ -59,6 +66,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var resultBox: LinearLayout
     private lateinit var statusText: TextView
     private lateinit var bar: ProgressBar
+    private lateinit var downloadedList: LinearLayout
+    private lateinit var scrolls: List<View>
+    private lateinit var tabViews: List<TextView>
     private val handler = Handler(Looper.getMainLooper())
     private var pending: Runnable? = null
     private var fetchJob: Job? = null
@@ -83,6 +93,26 @@ class MainActivity : AppCompatActivity() {
             if (bold) setTypeface(typeface, Typeface.BOLD)
         }
 
+    private fun pageRoot() = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(20), dp(24), dp(20), dp(32))
+    }
+
+    private fun page(content: View) = ScrollView(this).apply {
+        setBackgroundColor(bgC)
+        isFillViewport = true
+        addView(content)
+    }
+
+    private fun langChip() = tv(if (L.ar) "English" else "العربية", 13f, accentC, true).apply {
+        background = shape(cardC, 20, strokeC)
+        setPadding(dp(14), dp(8), dp(14), dp(8))
+        setOnClickListener {
+            L.save(this@MainActivity, !L.ar)
+            recreate()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         L.load(this)
@@ -101,43 +131,28 @@ class MainActivity : AppCompatActivity() {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
         window.statusBarColor = bgC
-        window.navigationBarColor = bgC
+        window.navigationBarColor = cardC
         WindowCompat.getInsetsController(window, window.decorView).apply {
             isAppearanceLightStatusBars = !night
             isAppearanceLightNavigationBars = !night
         }
 
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(24), dp(20), dp(32))
-            layoutDirection = if (L.ar) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
-        }
-
-        // Header
+        // ---------- Home ----------
+        val home = pageRoot()
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
         header.addView(tv("VideoGrab", 26f, textC, true), LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-        val lang = tv(if (L.ar) "English" else "العربية", 13f, accentC, true).apply {
-            background = shape(cardC, 20, strokeC)
-            setPadding(dp(14), dp(8), dp(14), dp(8))
-            setOnClickListener {
-                L.save(this@MainActivity, !L.ar)
-                recreate()
-            }
-        }
-        header.addView(lang)
-        root.addView(header, lp())
-
-        root.addView(
+        header.addView(langChip())
+        home.addView(header, lp())
+        home.addView(
             tv(
                 L.t("Download videos and audio from anywhere", "نزّل الفيديوهات والصوت من أي مكان"),
                 14f, mutedC
             ), lp(4)
         )
 
-        // Input row
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -162,9 +177,8 @@ class MainActivity : AppCompatActivity() {
         row.addView(paste, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
             marginStart = dp(8)
         })
-        root.addView(row, lp(24))
+        home.addView(row, lp(24))
 
-        // Status card
         val statusCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = shape(cardC, 16, strokeC)
@@ -179,24 +193,106 @@ class MainActivity : AppCompatActivity() {
         }
         statusCard.addView(statusText, lp())
         statusCard.addView(bar, lp(10))
-        root.addView(statusCard, lp(12))
+        home.addView(statusCard, lp(12))
 
         resultBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        root.addView(resultBox, lp())
+        home.addView(resultBox, lp())
 
-        // Update engine
-        val update = tv(L.t("Update download engine", "تحديث محرك التحميل"), 14f, accentC, true).apply {
-            gravity = Gravity.CENTER
-            setPadding(dp(12), dp(14), dp(12), dp(14))
-            setOnClickListener { updateEngine() }
+        home.addView(
+            tv(L.t("Update download engine", "تحديث محرك التحميل"), 14f, accentC, true).apply {
+                gravity = Gravity.CENTER
+                setPadding(dp(12), dp(14), dp(12), dp(14))
+                setOnClickListener { updateEngine() }
+            }, lp(24)
+        )
+
+        // ---------- Downloaded ----------
+        val dl = pageRoot()
+        dl.addView(tv(L.t("Downloaded", "التنزيلات"), 26f, textC, true), lp())
+        downloadedList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        dl.addView(downloadedList, lp())
+
+        // ---------- About ----------
+        val about = pageRoot()
+        about.addView(tv("VideoGrab", 26f, textC, true), lp())
+        about.addView(tv(L.t("Version 1.0", "الإصدار 1.0"), 13f, mutedC), lp(2))
+        about.addView(
+            tv(
+                L.t(
+                    "Download videos and audio from YouTube, Facebook, Instagram, TikTok and more. Share a link to the app, preview it, pick a quality and download.",
+                    "نزّل الفيديوهات والصوت من يوتيوب وفيسبوك وانستجرام وتيك توك وغيرهم. شارك الرابط للتطبيق، شوف المعاينة، اختار الجودة ونزّل."
+                ), 14f, textC
+            ), lp(16)
+        )
+        val contact = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = shape(cardC, 16, strokeC)
+            setPadding(dp(16), dp(16), dp(16), dp(16))
         }
-        root.addView(update, lp(24))
+        contact.addView(tv(L.t("Contact developer:", "تواصل مع المطوّر:"), 14f, mutedC))
+        contact.addView(
+            tv("@KeroEzzat", 14f, accentC, true).apply {
+                paintFlags = paintFlags or Paint.UNDERLINE_TEXT_FLAG
+                setOnClickListener { openTelegram() }
+            },
+            LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(6) }
+        )
+        about.addView(contact, lp(20))
+        val langRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = shape(cardC, 16, strokeC)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+        }
+        langRow.addView(
+            tv(L.t("Language", "اللغة"), 14f, mutedC),
+            LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)
+        )
+        langRow.addView(langChip())
+        about.addView(langRow, lp(12))
+        about.addView(
+            tv(
+                L.t(
+                    "For personal use. Respect the terms of each website and the rights of content owners.",
+                    "للاستخدام الشخصي. احترم شروط كل موقع وحقوق أصحاب المحتوى."
+                ), 12f, mutedC
+            ), lp(20)
+        )
 
-        setContentView(ScrollView(this).apply {
+        // ---------- Layout + tabs ----------
+        scrolls = listOf(page(home), page(dl), page(about))
+        val frame = FrameLayout(this)
+        scrolls.forEach { frame.addView(it, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)) }
+
+        val labels = listOf(
+            L.t("Download", "تحميل"),
+            L.t("Downloaded", "التنزيلات"),
+            L.t("About", "حول")
+        )
+        val bottomBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(cardC)
+        }
+        tabViews = labels.mapIndexed { i, label ->
+            tv(label, 13f, mutedC, true).apply {
+                gravity = Gravity.CENTER
+                setPadding(0, dp(16), 0, dp(16))
+                setOnClickListener { selectTab(i) }
+            }
+        }
+        tabViews.forEach { bottomBar.addView(it, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)) }
+
+        val outer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             setBackgroundColor(bgC)
-            isFillViewport = true
-            addView(root)
-        })
+            layoutDirection = if (L.ar) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
+        }
+        outer.addView(frame, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+        outer.addView(View(this).apply { setBackgroundColor(strokeC) },
+            LinearLayout.LayoutParams(MATCH_PARENT, dp(1)))
+        outer.addView(bottomBar, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        setContentView(outer)
 
         input.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
@@ -240,6 +336,9 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
+                launch {
+                    History.version.collect { if (lastTab == 1) renderDownloaded() }
+                }
             }
         }
 
@@ -249,6 +348,7 @@ class MainActivity : AppCompatActivity() {
             input.setText(cachedUrl ?: "")
             render(meta)
         }
+        selectTab(lastTab)
         handleIntent(intent)
     }
 
@@ -258,16 +358,34 @@ class MainActivity : AppCompatActivity() {
         handleIntent(intent)
     }
 
+    private fun selectTab(i: Int) {
+        lastTab = i
+        scrolls.forEachIndexed { idx, v -> v.visibility = if (idx == i) View.VISIBLE else View.GONE }
+        tabViews.forEachIndexed { idx, t -> t.setTextColor(if (idx == i) accentC else mutedC) }
+        if (i == 1) renderDownloaded()
+    }
+
     private fun handleIntent(i: Intent?) {
         if (i?.action == Intent.ACTION_SEND) {
             val u = extractUrl(i.getStringExtra(Intent.EXTRA_TEXT))
             i.action = null
+            selectTab(0)
             if (u != null) {
                 fetch(u)
                 input.setText(u)
             } else {
-                Toast.makeText(this, L.t("No link found", "مفيش رابط"), Toast.LENGTH_SHORT).show()
+                toast(L.t("No link found", "مفيش رابط"))
             }
+        }
+    }
+
+    private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
+
+    private fun openTelegram() {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/KeroEzzat01")))
+        } catch (e: Exception) {
+            toast(L.t("Couldn't open the link", "مقدرتش أفتح اللينك"))
         }
     }
 
@@ -277,7 +395,7 @@ class MainActivity : AppCompatActivity() {
         val t = if (clip != null && clip.itemCount > 0) clip.getItemAt(0).coerceToText(this).toString() else null
         val u = extractUrl(t)
         if (u == null) {
-            Toast.makeText(this, L.t("No link in clipboard", "مفيش رابط في الحافظة"), Toast.LENGTH_SHORT).show()
+            toast(L.t("No link in clipboard", "مفيش رابط في الحافظة"))
         } else {
             fetch(u)
             input.setText(u)
@@ -376,38 +494,23 @@ class MainActivity : AppCompatActivity() {
     private fun startDownload(meta: VideoMeta, opt: Option) {
         val url = currentUrl ?: return
         DownloadService.start(this, url, opt, meta.title)
-        Toast.makeText(this, L.t("Download started", "بدأ التحميل"), Toast.LENGTH_SHORT).show()
+        toast(L.t("Download started", "بدأ التحميل"))
     }
 
-    private fun loadThumb(url: String, img: ImageView) {
-        lifecycleScope.launch {
-            val bmp = withContext(Dispatchers.IO) {
-                runCatching {
-                    val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                        connectTimeout = 8000
-                        readTimeout = 8000
-                        setRequestProperty("User-Agent", "Mozilla/5.0")
-                    }
-                    conn.inputStream.use { BitmapFactory.decodeStream(it) }
-                }.getOrNull()
-            }
-            if (bmp != null) img.setImageBitmap(bmp) else img.visibility = View.GONE
-        }
+    // ---------- Downloaded tab ----------
+    private fun exists(u: String): Boolean = try {
+        contentResolver.openAssetFileDescriptor(Uri.parse(u), "r")?.use { true } ?: false
+    } catch (e: Exception) {
+        false
     }
 
-    private fun updateEngine() {
-        Status.set(L.t("Updating engine…", "جاري تحديث المحرك…"), -2)
+    private fun renderDownloaded() {
         lifecycleScope.launch {
-            val msg = withContext(Dispatchers.IO) {
-                try {
-                    DownloadService.ensureInit(applicationContext)
-                    YoutubeDL.getInstance().updateYoutubeDL(applicationContext)
-                    L.t("Engine updated", "تم تحديث المحرك")
-                } catch (e: Exception) {
-                    L.t("Update failed: ", "فشل التحديث: ") + (e.message ?: "")
-                }
+            val items = withContext(Dispatchers.IO) {
+                val all = History.all(applicationContext)
+                val ok = all.filter { exists(it.uri) }
+                if (ok.size != all.size) History.replaceQuietly(applicationContext, ok)
+                ok
             }
-            Status.set(msg)
-        }
-    }
-}
+            downloadedList.removeAllViews()
+            if (i
