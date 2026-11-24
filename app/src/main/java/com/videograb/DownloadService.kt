@@ -199,9 +199,13 @@ class DownloadService : Service() {
             ?: error(L.t("File not found after download", "الملف مش موجود بعد التحميل"))
 
         val isAudio = file.extension.lowercase() in AUDIO_EXT
+                val size = file.length()
         val uri = saveToGallery(file, isAudio)
         file.delete()
-
+        History.add(
+            applicationContext,
+            HistoryItem(file.nameWithoutExtension, uri.toString(), isAudio, size, System.currentTimeMillis())
+        )
         Status.set(L.t("Saved: ${file.name}", "تم الحفظ: ${file.name}"))
         val open = PendingIntent.getActivity(
             this, notifId,
