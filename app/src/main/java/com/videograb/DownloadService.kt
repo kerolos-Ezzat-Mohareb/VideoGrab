@@ -1,5 +1,6 @@
 package com.videograb
 
+import com.yausername.aria2c.Aria2c
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
