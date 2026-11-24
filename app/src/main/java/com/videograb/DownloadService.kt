@@ -1,6 +1,5 @@
 package com.videograb
 
-import com.yausername.aria2c.Aria2c
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -14,6 +13,7 @@ import android.os.IBinder
 import android.provider.MediaStore
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.yausername.aria2c.Aria2c
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
@@ -45,12 +45,17 @@ class DownloadService : Service() {
             if (active.get() == 0) stopSelf()
             return START_NOT_STICKY
         }
+        val quality = try {
+            Quality.valueOf(intent.getStringExtra(EXTRA_QUALITY) ?: "BEST")
+        } catch (e: Exception) {
+            Quality.BEST
+        }
 
         val notifId = 100 + startId
         active.incrementAndGet()
         scope.launch {
             try {
-                download(url, notifId)
+                download(url, notifId, quality)
             } catch (e: Exception) {
                 val msg = e.message?.lineSequence()?.lastOrNull { it.isNotBlank() } ?: "خطأ غير معروف"
                 Status.text.value = "فشل التحميل: $msg"
@@ -62,17 +67,28 @@ class DownloadService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun download(url: String, notifId: Int) {
+    private fun download(url: String, notifId: Int, quality: Quality) {
         ensureInit(applicationContext)
 
         val tmp = File(cacheDir, "dl_$notifId").apply { deleteRecursively(); mkdirs() }
         val request = YoutubeDLRequest(url).apply {
-            addOption("-f", "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b")
-            addOption("--merge-output-format", "mp4")
+            if (quality.audioOnly) {
+                addOption("-f", "ba/b")
+                addOption("-x")
+                addOption("--audio-format", "mp3")
+                addOption("--audio-quality", "0")
+            } else {
+                val h = quality.height
+                addOption(
+                    "-f",
+                    "bv*[height<=$h][ext=mp4]+ba[ext=m4a]/b[height<=$h][ext=mp4]/bv*[height<=$h]+ba/b[height<=$h]/b"
+                )
+                addOption("--merge-output-format", "mp4")
+            }
             addOption("--no-playlist")
             addOption("--no-mtime")
             addOption("--downloader", "libaria2c.so")
-addOption("--external-downloader-args", "aria2c:-x 16 -s 16 -k 1M")
+            addOption("--external-downloader-args", "aria2c:-x 16 -s 16 -k 1M")
             addOption("-o", tmp.absolutePath + "/%(title).80s.%(ext)s")
         }
 
@@ -92,17 +108,18 @@ addOption("--external-downloader-args", "aria2c:-x 16 -s 16 -k 1M")
         }
 
         val file = tmp.listFiles()
-            ?.filter { it.extension.lowercase() in setOf("mp4", "mkv", "webm", "mov") }
+            ?.filter { it.extension.lowercase() in MEDIA_EXT }
             ?.maxByOrNull { it.length() }
             ?: error("ملقاش الملف بعد التحميل")
 
-        val uri = saveToGallery(file)
+        val isAudio = file.extension.lowercase() in AUDIO_EXT
+        val uri = saveToGallery(file, isAudio)
         file.delete(); tmp.deleteRecursively()
 
         Status.text.value = "تم التحميل: ${file.name}"
         val open = PendingIntent.getActivity(
             this, notifId,
-            Intent(Intent.ACTION_VIEW).setDataAndType(uri, "video/*")
+            Intent(Intent.ACTION_VIEW).setDataAndType(uri, if (isAudio) "audio/*" else "video/*")
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
             PendingIntent.FLAG_IMMUTABLE
         )
@@ -118,25 +135,31 @@ addOption("--external-downloader-args", "aria2c:-x 16 -s 16 -k 1M")
         )
     }
 
-    private fun saveToGallery(file: File): Uri {
+    private fun saveToGallery(file: File, isAudio: Boolean): Uri {
         val mime = when (file.extension.lowercase()) {
+            "mp3" -> "audio/mpeg"
+            "m4a" -> "audio/mp4"
+            "opus", "ogg" -> "audio/ogg"
             "webm" -> "video/webm"
             "mkv" -> "video/x-matroska"
             "mov" -> "video/quicktime"
             else -> "video/mp4"
         }
+        val collection = if (isAudio) MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+        else MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        val folder = if (isAudio) "Music/VideoGrab" else "Movies/VideoGrab"
+
         val values = ContentValues().apply {
-            put(MediaStore.Video.Media.DISPLAY_NAME, file.name)
-            put(MediaStore.Video.Media.MIME_TYPE, mime)
-            put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/VideoGrab")
-            put(MediaStore.Video.Media.IS_PENDING, 1)
+            put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
+            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, folder)
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         val resolver = contentResolver
-        val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
-            ?: error("مقدرتش أنشئ الملف في المعرض")
+        val uri = resolver.insert(collection, values) ?: error("مقدرتش أنشئ الملف")
         resolver.openOutputStream(uri)!!.use { out -> file.inputStream().use { it.copyTo(out) } }
         values.clear()
-        values.put(MediaStore.Video.Media.IS_PENDING, 0)
+        values.put(MediaStore.MediaColumns.IS_PENDING, 0)
         resolver.update(uri, values, null, null)
         return uri
     }
@@ -163,12 +186,17 @@ addOption("--external-downloader-args", "aria2c:-x 16 -s 16 -k 1M")
         private const val CHANNEL = "downloads"
         private const val FG_ID = 1
         private const val EXTRA_URL = "url"
+        private const val EXTRA_QUALITY = "quality"
+        private val AUDIO_EXT = setOf("mp3", "m4a", "opus", "ogg")
+        private val MEDIA_EXT = AUDIO_EXT + setOf("mp4", "mkv", "webm", "mov")
         @Volatile private var initialized = false
 
-        fun start(context: Context, url: String) {
+        fun start(context: Context, url: String, quality: Quality = Quality.BEST) {
             ContextCompat.startForegroundService(
                 context,
-                Intent(context, DownloadService::class.java).putExtra(EXTRA_URL, url)
+                Intent(context, DownloadService::class.java)
+                    .putExtra(EXTRA_URL, url)
+                    .putExtra(EXTRA_QUALITY, quality.name)
             )
         }
 
