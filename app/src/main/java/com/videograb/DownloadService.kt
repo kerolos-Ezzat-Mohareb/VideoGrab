@@ -199,13 +199,9 @@ class DownloadService : Service() {
             ?: error(L.t("File not found after download", "الملف مش موجود بعد التحميل"))
 
         val isAudio = file.extension.lowercase() in AUDIO_EXT
-                val size = file.length()
         val uri = saveToGallery(file, isAudio)
         file.delete()
-        History.add(
-            applicationContext,
-            HistoryItem(file.nameWithoutExtension, uri.toString(), isAudio, size, System.currentTimeMillis())
-        )
+
         Status.set(L.t("Saved: ${file.name}", "تم الحفظ: ${file.name}"))
         val open = PendingIntent.getActivity(
             this, notifId,
@@ -248,6 +244,77 @@ class DownloadService : Service() {
         val resolver = contentResolver
         val uri = resolver.insert(collection, values) ?: error("Could not create file")
         resolver.openOutputStream(uri)!!.use { out -> file.inputStream().use { it.copyTo(out) } }
+        values.clear()
+        values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+        return uri
+    }
+
+    private fun cancelAction(id: Int): NotificationCompat.Action {
+        val pi = PendingIntent.getService(
+            this, id,
+            Intent(this, DownloadService::class.java).setAction(ACTION_CANCEL).putExtra(EXTRA_ID, id),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        return NotificationCompat.Action(
+            android.R.drawable.ic_menu_close_clear_cancel, L.t("Cancel", "إلغاء"), pi
+        )
+    }
+
+    private fun baseNotification(title: String) =
+        NotificationCompat.Builder(this, CHANNEL)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle(title)
+            .setOnlyAlertOnce(true)
+
+    private fun notify(id: Int, n: Notification) =
+        getSystemService(NotificationManager::class.java).notify(id, n)
+
+    private fun createChannel() {
+        val nm = getSystemService(NotificationManager::class.java)
+        if (nm.getNotificationChannel(CHANNEL) == null) {
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL, "Downloads", NotificationManager.IMPORTANCE_LOW)
+            )
+        }
+    }
+
+    companion object {
+        private const val CHANNEL = "downloads"
+        private const val FG_ID = 1
+        private const val STALL_MS = 120_000L
+        private const val ACTION_CANCEL = "com.videograb.CANCEL"
+        private const val EXTRA_ID = "id"
+        private const val EXTRA_URL = "url"
+        private const val EXTRA_TYPE = "type"
+        private const val EXTRA_HEIGHT = "height"
+        private const val EXTRA_PARTS = "parts"
+        private const val EXTRA_TITLE = "title"
+        private val AUDIO_EXT = setOf("mp3", "m4a", "opus", "ogg")
+        private val MEDIA_EXT = AUDIO_EXT + setOf("mp4", "mkv", "webm", "mov")
+        @Volatile private var initialized = false
+
+        fun start(context: Context, url: String, opt: Option, title: String) {
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, DownloadService::class.java)
+                    .putExtra(EXTRA_URL, url)
+                    .putExtra(EXTRA_TYPE, opt.type)
+                    .putExtra(EXTRA_HEIGHT, opt.height)
+                    .putExtra(EXTRA_PARTS, opt.parts)
+                    .putExtra(EXTRA_TITLE, title)
+            )
+        }
+
+        @Synchronized
+        fun ensureInit(context: Context) {
+            if (initialized) return
+            YoutubeDL.getInstance().init(context)
+            FFmpeg.getInstance().init(context)
+            initialized = true
+        }
+    }
+}nOutputStream(uri)!!.use { out -> file.inputStream().use { it.copyTo(out) } }
         values.clear()
         values.put(MediaStore.MediaColumns.IS_PENDING, 0)
         resolver.update(uri, values, null, null)
