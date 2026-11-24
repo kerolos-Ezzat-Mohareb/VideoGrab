@@ -7,7 +7,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
-        android:label="VideoGrab"
+        android:name=".App"
+        android:label="Kyrex"
         android:supportsRtl="true"
         android:extractNativeLibs="true"
         android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">
