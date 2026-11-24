@@ -1,20 +1,20 @@
 package com.videograb
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 
 class ShareActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val url = extractUrl(intent?.getStringExtra(android.content.Intent.EXTRA_TEXT))
+        val url = extractUrl(intent?.getStringExtra(Intent.EXTRA_TEXT))
         if (url == null) {
             Toast.makeText(this, "مفيش رابط في اللي اتشارك", Toast.LENGTH_SHORT).show()
+            finish()
         } else {
-            DownloadService.start(this, url)
-            Toast.makeText(this, "بدأ التحميل… شوف الإشعارات", Toast.LENGTH_SHORT).show()
+            chooseQualityAndDownload(this, url) { finish() }
         }
-        finish()
     }
 }
 
