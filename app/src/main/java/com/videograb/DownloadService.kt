@@ -71,6 +71,8 @@ class DownloadService : Service() {
             addOption("--merge-output-format", "mp4")
             addOption("--no-playlist")
             addOption("--no-mtime")
+            addOption("--downloader", "libaria2c.so")
+addOption("--external-downloader-args", "aria2c:-x 16 -s 16 -k 1M")
             addOption("-o", tmp.absolutePath + "/%(title).80s.%(ext)s")
         }
 
@@ -175,6 +177,7 @@ class DownloadService : Service() {
             if (initialized) return
             YoutubeDL.getInstance().init(context)
             FFmpeg.getInstance().init(context)
+            Aria2c.getInstance().init(context)
             initialized = true
         }
     }
