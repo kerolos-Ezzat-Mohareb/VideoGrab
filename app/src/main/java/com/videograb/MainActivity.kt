@@ -584,3 +584,69 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+    private fun openItem(item: HistoryItem) {
+        try {
+            startActivity(
+                Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(Uri.parse(item.uri), if (item.audio) "audio/*" else "video/*")
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            )
+        } catch (e: Exception) {
+            toast(L.t("No app found to open this file", "مفيش تطبيق يفتح الملف ده"))
+        }
+    }
+
+    private fun confirmDelete(item: HistoryItem) {
+        AlertDialog.Builder(this)
+            .setMessage(L.t("Delete this file from your device?", "تحذف الملف ده من الموبايل؟"))
+            .setPositiveButton(L.t("Delete", "حذف")) { _, _ -> deleteItem(item) }
+            .setNegativeButton(L.t("Cancel", "إلغاء"), null)
+            .show()
+    }
+
+    private fun deleteItem(item: HistoryItem) {
+        lifecycleScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                try {
+                    contentResolver.delete(Uri.parse(item.uri), null, null) >= 0
+                } catch (e: Exception) {
+                    false
+                }
+            }
+            if (ok) History.remove(applicationContext, item.uri)
+            else toast(L.t("Couldn't delete the file", "مقدرتش أحذف الملف"))
+        }
+    }
+
+    private fun loadThumb(url: String, img: ImageView) {
+        lifecycleScope.launch {
+            val bmp = withContext(Dispatchers.IO) {
+                runCatching {
+                    val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                        connectTimeout = 8000
+                        readTimeout = 8000
+                        setRequestProperty("User-Agent", "Mozilla/5.0")
+                    }
+                    conn.inputStream.use { BitmapFactory.decodeStream(it) }
+                }.getOrNull()
+            }
+            if (bmp != null) img.setImageBitmap(bmp) else img.visibility = View.GONE
+        }
+    }
+
+    private fun updateEngine() {
+        Status.set(L.t("Updating engine…", "جاري تحديث المحرك…"), -2)
+        lifecycleScope.launch {
+            val msg = withContext(Dispatchers.IO) {
+                try {
+                    DownloadService.ensureInit(applicationContext)
+                    YoutubeDL.getInstance().updateYoutubeDL(applicationContext)
+                    L.t("Engine updated", "تم تحديث المحرك")
+                } catch (e: Exception) {
+                    L.t("Update failed: ", "فشل التحديث: ") + (e.message ?: "")
+                }
+            }
+            Status.set(msg)
+        }
+    }
+}
