@@ -513,4 +513,262 @@ class MainActivity : AppCompatActivity() {
                 ok
             }
             downloadedList.removeAllViews()
+            if (i كل موقع وحقوق أصحاب المحتوى."
+                ), 12f, mutedC
+            ), lp(20)
+        )
+
+        // ---------- Layout + tabs ----------
+        scrolls = listOf(page(home), page(dl), page(about))
+        val frame = FrameLayout(this)
+        scrolls.forEach { frame.addView(it, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)) }
+
+        val labels = listOf(
+            L.t("Download", "تحميل"),
+            L.t("Downloaded", "التنزيلات"),
+            L.t("About", "حول")
+        )
+        val bottomBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(cardC)
+        }
+        tabViews = labels.mapIndexed { i, label ->
+            tv(label, 13f, mutedC, true).apply {
+                gravity = Gravity.CENTER
+                setPadding(0, dp(16), 0, dp(16))
+                setOnClickListener { selectTab(i) }
+            }
+        }
+        tabViews.forEach { bottomBar.addView(it, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)) }
+
+        val outer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(bgC)
+            layoutDirection = if (L.ar) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
+        }
+        outer.addView(frame, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+        outer.addView(View(this).apply { setBackgroundColor(strokeC) },
+            LinearLayout.LayoutParams(MATCH_PARENT, dp(1)))
+        outer.addView(bottomBar, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        setContentView(outer)
+
+        input.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
+            override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                pending?.let { handler.removeCallbacks(it) }
+                val u = extractUrl(s?.toString())
+                if (u != null && u != currentUrl) {
+                    val r = Runnable { fetch(u) }
+                    pending = r
+                    handler.postDelayed(r, 600)
+                }
+            }
+        })
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                launch {
+                    Status.text.collect {
+                        statusText.text = it.ifEmpty {
+                            L.t(
+                                "Paste a video link or share it from any app.",
+                                "الصق رابط فيديو أو شاركه من أي تطبيق."
+                            )
+                        }
+                    }
+                }
+                launch {
+                    Status.progress.collect { p ->
+                        when (p) {
+                            -1 -> bar.visibility = View.GONE
+                            -2 -> {
+                                bar.visibility = View.VISIBLE
+                                bar.isIndeterminate = true
+                            }
+                            else -> {
+                                bar.visibility = View.VISIBLE
+                                bar.isIndeterminate = false
+                                bar.progress = p
+                            }
+                        }
+                    }
+                }
+                launch {
+                    History.version.collect { if (lastTab == 1) renderDownloaded() }
+                }
+            }
+        }
+
+        val meta = cachedMeta
+        if (meta != null) {
+            currentUrl = cachedUrl
+            input.setText(cachedUrl ?: "")
+            render(meta)
+        }
+        selectTab(lastTab)
+        handleIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun selectTab(i: Int) {
+        lastTab = i
+        scrolls.forEachIndexed { idx, v -> v.visibility = if (idx == i) View.VISIBLE else View.GONE }
+        tabViews.forEachIndexed { idx, t -> t.setTextColor(if (idx == i) accentC else mutedC) }
+        if (i == 1) renderDownloaded()
+    }
+
+    private fun handleIntent(i: Intent?) {
+        if (i?.action == Intent.ACTION_SEND) {
+            val u = extractUrl(i.getStringExtra(Intent.EXTRA_TEXT))
+            i.action = null
+            selectTab(0)
+            if (u != null) {
+                fetch(u)
+                input.setText(u)
+            } else {
+                toast(L.t("No link found", "مفيش رابط"))
+            }
+        }
+    }
+
+    private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
+
+    private fun openTelegram() {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/KeroEzzat01")))
+        } catch (e: Exception) {
+            toast(L.t("Couldn't open the link", "مقدرتش أفتح اللينك"))
+        }
+    }
+
+    private fun pasteFromClipboard() {
+        val cm = getSystemService(ClipboardManager::class.java)
+        val clip = cm.primaryClip
+        val t = if (clip != null && clip.itemCount > 0) clip.getItemAt(0).coerceToText(this).toString() else null
+        val u = extractUrl(t)
+        if (u == null) {
+            toast(L.t("No link in clipboard", "مفيش رابط في الحافظة"))
+        } else {
+            fetch(u)
+            input.setText(u)
+        }
+    }
+
+    private fun fetch(url: String) {
+        pending?.let { handler.removeCallbacks(it) }
+        fetchJob?.cancel()
+        currentUrl = url
+        resultBox.removeAllViews()
+        Status.set(L.t("Analyzing link…", "جاري تحليل الرابط…"), -2)
+        fetchJob = lifecycleScope.launch {
+            val r = withContext(Dispatchers.IO) {
+                runCatching { InfoFetcher.fetch(applicationContext, url) }
+            }
+            r.onSuccess { meta ->
+                cachedUrl = url
+                cachedMeta = meta
+                render(meta)
+                Status.set(L.t("Choose a quality to download", "اختر الجودة للتحميل"))
+            }.onFailure { e ->
+                Status.set(cleanError(e))
+            }
+        }
+    }
+
+    private fun render(meta: VideoMeta) {
+        resultBox.removeAllViews()
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = shape(cardC, 20, strokeC)
+            setPadding(dp(12), dp(12), dp(12), dp(16))
+        }
+        if (meta.thumb.isNotEmpty()) {
+            val img = ImageView(this).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                background = shape(strokeC, 14)
+                clipToOutline = true
+            }
+            card.addView(img, LinearLayout.LayoutParams(MATCH_PARENT, dp(190)))
+            loadThumb(meta.thumb, img)
+        }
+        card.addView(tv(meta.title, 16f, textC, true).apply {
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+        }, lp(12))
+        val sub = listOf(meta.uploader, fmtDuration(meta.duration))
+            .filter { it.isNotEmpty() }.joinToString("  •  ")
+        if (sub.isNotEmpty()) card.addView(tv(sub, 13f, mutedC), lp(4))
+        resultBox.addView(card, lp(16))
+
+        if (meta.video.isNotEmpty()) {
+            resultBox.addView(tv(L.t("Video", "فيديو"), 13f, mutedC, true), lp(20))
+            for (o in meta.video) {
+                resultBox.addView(
+                    optionRow("${o.height}p", "MP4", fmtSize(o.sizeBytes, o.approx)) {
+                        startDownload(meta, o)
+                    }, lp(8)
+                )
+            }
+        }
+        resultBox.addView(tv(L.t("Audio", "صوت"), 13f, mutedC, true), lp(20))
+        for (o in meta.audio) {
+            val (title, sub2) = when (o.type) {
+                "mp3_320" -> "MP3 · 320 kbps" to L.t("Converted · plays everywhere", "محوّل · يشتغل على كل الأجهزة")
+                "mp3_128" -> "MP3 · 128 kbps" to L.t("Smaller file", "حجم أصغر")
+                "m4a" -> "M4A · AAC" to L.t("Original quality, no re-encode", "الجودة الأصلية بدون تحويل")
+                else -> "OPUS" to L.t("Best quality for its size", "أفضل جودة بالنسبة للحجم")
+            }
+            resultBox.addView(
+                optionRow(title, sub2, fmtSize(o.sizeBytes, o.approx)) { startDownload(meta, o) },
+                lp(8)
+            )
+        }
+    }
+
+    private fun optionRow(title: String, sub: String, size: String, onClick: () -> Unit): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = shape(cardC, 16, strokeC)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            isClickable = true
+            setOnClickListener { onClick() }
+        }
+        val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        texts.addView(tv(title, 16f, textC, true))
+        texts.addView(tv(sub, 12f, mutedC))
+        row.addView(texts, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        row.addView(tv(size, 14f, accentC, true))
+        return row
+    }
+
+    private fun startDownload(meta: VideoMeta, opt: Option) {
+        val url = currentUrl ?: return
+        DownloadService.start(this, url, opt, meta.title)
+        toast(L.t("Download started", "بدأ التحميل"))
+    }
+
+    // ---------- Downloaded tab ----------
+    private fun exists(u: String): Boolean = try {
+        contentResolver.openAssetFileDescriptor(Uri.parse(u), "r")?.use { true } ?: false
+    } catch (e: Exception) {
+        false
+    }
+
+    private fun renderDownloaded() {
+        lifecycleScope.launch {
+            val items = withContext(Dispatchers.IO) {
+                val all = History.all(applicationContext)
+                val ok = all.filter { exists(it.uri) }
+                if (ok.size != all.size) History.replaceQuietly(applicationContext, ok)
+                ok
+            }
+            downloadedList.removeAllViews()
             if (i
