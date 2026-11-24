@@ -508,11 +508,79 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun optionRow(title: String, sub: String, size: String, onClick: () -> Unit): View {
+        private fun optionRow(title: String, sub: String, size: String, onClick: () -> Unit): View {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             background = shape(cardC, 16, strokeC)
             setPadding(dp(16), dp(14), dp(16), dp(14))
             isClickable = true
-            setOnClickListen
+            setOnClickListener { onClick() }
+        }
+        val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        texts.addView(tv(title, 16f, textC, true))
+        texts.addView(tv(sub, 12f, mutedC))
+        row.addView(texts, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        row.addView(tv(size, 14f, accentC, true))
+        return row
+    }
+
+    private fun startDownload(meta: VideoMeta, opt: Option) {
+        val url = currentUrl ?: return
+        DownloadService.start(this, url, opt, meta.title)
+        toast(L.t("Download started", "بدأ التحميل"))
+    }
+
+    // ---------- Downloaded tab ----------
+    private fun exists(u: String): Boolean = try {
+        contentResolver.openAssetFileDescriptor(Uri.parse(u), "r")?.use { true } ?: false
+    } catch (e: Exception) {
+        false
+    }
+
+    private fun renderDownloaded() {
+        lifecycleScope.launch {
+            val items = withContext(Dispatchers.IO) {
+                val all = History.all(applicationContext)
+                val ok = all.filter { exists(it.uri) }
+                if (ok.size != all.size) History.replaceQuietly(applicationContext, ok)
+                ok
+            }
+            downloadedList.removeAllViews()
+            if (items.isEmpty()) {
+                downloadedList.addView(
+                    tv(L.t("Nothing downloaded yet.", "لسه مفيش تنزيلات."), 14f, mutedC), lp(24)
+                )
+                return@launch
+            }
+            for (item in items) {
+                val row = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    background = shape(cardC, 16, strokeC)
+                    setPadding(dp(16), dp(12), dp(8), dp(12))
+                    isClickable = true
+                    setOnClickListener { openItem(item) }
+                }
+                val texts = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+                texts.addView(tv(item.title, 15f, textC, true).apply {
+                    maxLines = 2
+                    ellipsize = TextUtils.TruncateAt.END
+                })
+                val sub = listOf(
+                    if (item.audio) L.t("Audio", "صوت") else L.t("Video", "فيديو"),
+                    fmtSize(item.size, false),
+                    DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(item.time))
+                ).joinToString("  •  ")
+                texts.addView(tv(sub, 12f, mutedC))
+                row.addView(texts, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+                row.addView(
+                    tv(L.t("Delete", "حذف"), 13f, 0xFFEF4444.toInt(), true).apply {
+                        setPadding(dp(12), dp(10), dp(12), dp(10))
+                        setOnClickListener { confirmDelete(item) }
+                    }
+                )
+                downloadedList.addView(row, lp(8))
+            }
+        }
+    }
