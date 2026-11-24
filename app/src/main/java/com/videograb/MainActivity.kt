@@ -63,7 +63,7 @@ class MainActivity : AppCompatActivity() {
             if (url == null) {
                 Toast.makeText(this, "الصق رابط صحيح", Toast.LENGTH_SHORT).show()
             } else {
-                DownloadService.start(this, url)
+                chooseQualityAndDownload(this, url)
                 input.setText("")
             }
         }
