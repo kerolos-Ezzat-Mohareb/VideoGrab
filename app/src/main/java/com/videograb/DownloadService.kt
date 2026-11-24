@@ -50,29 +50,35 @@ class DownloadService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         L.load(applicationContext)
         createChannel()
-        startForeground(FG_ID, baseNotification(L.t("VideoGrab is running", "VideoGrab شغال")).build())
+        startForeground(FG_ID, baseNotification(L.t("Kyrex is running", "Kyrex شغال")).build())
 
-        if (intent?.action == ACTION_CANCEL) {
-            val id = intent.getIntExtra(EXTRA_ID, -1)
+        val i = intent
+        if (i == null) {
+            if (active.get() == 0) stopSelf()
+            return START_NOT_STICKY
+        }
+
+        if (i.action == ACTION_CANCEL) {
+            val id = i.getIntExtra(EXTRA_ID, -1)
             cancelled.add(id)
             YoutubeDL.getInstance().destroyProcessById("dl_$id")
             if (active.get() == 0) stopSelf()
             return START_NOT_STICKY
         }
 
-        val url = intent?.getStringExtra(EXTRA_URL)
+        val url = i.getStringExtra(EXTRA_URL)
         if (url == null) {
             if (active.get() == 0) stopSelf()
             return START_NOT_STICKY
         }
         val opt = Option(
-            type = intent.getStringExtra(EXTRA_TYPE) ?: "video",
-            height = intent.getIntExtra(EXTRA_HEIGHT, 1080),
-            sizeBytes = -1,
+            type = i.getStringExtra(EXTRA_TYPE) ?: "video",
+            height = i.getIntExtra(EXTRA_HEIGHT, 1080),
+            sizeBytes = -1L,
             approx = true,
-            parts = intent.getIntExtra(EXTRA_PARTS, 1)
+            parts = i.getIntExtra(EXTRA_PARTS, 1)
         )
-        val title = intent.getStringExtra(EXTRA_TITLE) ?: "Video"
+        val title = i.getStringExtra(EXTRA_TITLE) ?: "Video"
 
         val notifId = 100 + startId
         active.incrementAndGet()
@@ -89,7 +95,33 @@ class DownloadService : Service() {
                 }
             }
             try {
-                download(url, notifId, opt, title, beat)
+                try {
+                    download(url, notifId, opt, title, beat)
+                } catch (e: Exception) {
+                    val userStopped = cancelled.contains(notifId) || stalled.contains(notifId)
+                    if (!userStopped && needsEngineUpdate(e) && claimAutoUpdate()) {
+                        val msg = L.t(
+                            "Server rejected the request. Updating the engine and retrying…",
+                            "السيرفر رفض الطلب. جاري تحديث المحرك وإعادة المحاولة…"
+                        )
+                        Status.set(msg, -2)
+                        notify(
+                            notifId,
+                            baseNotification(title).setContentText(msg)
+                                .setProgress(0, 0, true).setOngoing(true)
+                                .addAction(cancelAction(notifId)).build()
+                        )
+                        beat.set(System.currentTimeMillis())
+                        try {
+                            YoutubeDL.getInstance().updateYoutubeDL(applicationContext)
+                        } catch (_: Exception) {
+                        }
+                        beat.set(System.currentTimeMillis())
+                        download(url, notifId, opt, title, beat)
+                    } else {
+                        throw e
+                    }
+                }
             } catch (e: Exception) {
                 val msg: String? = when {
                     cancelled.remove(notifId) -> null
@@ -117,6 +149,15 @@ class DownloadService : Service() {
             }
         }
         return START_NOT_STICKY
+    }
+
+    private fun needsEngineUpdate(e: Throwable): Boolean {
+        val m = (e.message ?: "").lowercase()
+        return listOf(
+            "sign in", "not a bot", "http error 403", "http error 400",
+            "unable to extract", "nsig", "signature", "no video formats",
+            "precondition check failed"
+        ).any { m.contains(it) }
     }
 
     private fun download(url: String, notifId: Int, opt: Option, title: String, beat: AtomicLong) {
@@ -179,11 +220,12 @@ class DownloadService : Service() {
             val overall = (((p - 1) + progress / 100f) / parts * 100f).toInt().coerceIn(0, 100)
             if (overall != lastShown) {
                 lastShown = overall
-                Status.set(L.t("Downloading… $overall%", "جاري التحميل… $overall%"), overall)
+                val msg = L.t("Downloading… $overall%", "جاري التحميل… $overall%")
+                Status.set(msg, overall)
                 notify(
                     notifId,
                     baseNotification(title)
-                        .setContentText(L.t("Downloading… $overall%", "جاري التحميل… $overall%"))
+                        .setContentText(msg)
                         .setProgress(100, overall, false)
                         .setOngoing(true)
                         .addAction(cancelAction(notifId))
@@ -199,8 +241,13 @@ class DownloadService : Service() {
             ?: error(L.t("File not found after download", "الملف مش موجود بعد التحميل"))
 
         val isAudio = file.extension.lowercase() in AUDIO_EXT
+        val size = file.length()
         val uri = saveToGallery(file, isAudio)
         file.delete()
+        History.add(
+            applicationContext,
+            HistoryItem(file.nameWithoutExtension, uri.toString(), isAudio, size, System.currentTimeMillis())
+        )
 
         Status.set(L.t("Saved: ${file.name}", "تم الحفظ: ${file.name}"))
         val open = PendingIntent.getActivity(
@@ -233,7 +280,7 @@ class DownloadService : Service() {
         }
         val collection = if (isAudio) MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
         else MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-        val folder = if (isAudio) "Music/VideoGrab" else "Movies/VideoGrab"
+        val folder = if (isAudio) "Music/Kyrex" else "Movies/Kyrex"
 
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
@@ -283,6 +330,7 @@ class DownloadService : Service() {
         private const val CHANNEL = "downloads"
         private const val FG_ID = 1
         private const val STALL_MS = 120_000L
+        private const val AUTO_UPDATE_GAP_MS = 10 * 60_000L
         private const val ACTION_CANCEL = "com.videograb.CANCEL"
         private const val EXTRA_ID = "id"
         private const val EXTRA_URL = "url"
@@ -293,6 +341,15 @@ class DownloadService : Service() {
         private val AUDIO_EXT = setOf("mp3", "m4a", "opus", "ogg")
         private val MEDIA_EXT = AUDIO_EXT + setOf("mp4", "mkv", "webm", "mov")
         @Volatile private var initialized = false
+        @Volatile private var lastAutoUpdate = 0L
+
+        @Synchronized
+        fun claimAutoUpdate(): Boolean {
+            val now = System.currentTimeMillis()
+            if (now - lastAutoUpdate < AUTO_UPDATE_GAP_MS) return false
+            lastAutoUpdate = now
+            return true
+        }
 
         fun start(context: Context, url: String, opt: Option, title: String) {
             ContextCompat.startForegroundService(
