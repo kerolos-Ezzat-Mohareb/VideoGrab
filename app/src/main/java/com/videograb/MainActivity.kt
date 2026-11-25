@@ -173,12 +173,18 @@ class MainActivity : AppCompatActivity() {
 
         // ---------- Download tab ----------
         val home = pageRoot()
-        home.addView(tv("Kyrex", 26f, textC, true), lp())
+                val logo = ImageView(this).apply { setImageResource(R.drawable.kyrex_logo) }
+        home.addView(
+            logo,
+            LinearLayout.LayoutParams(dp(88), dp(88)).apply { gravity = Gravity.CENTER_HORIZONTAL }
+        )
+        playLogoAnimation(logo)
+        home.addView(tv("Kyrex", 26f, textC, true).apply { gravity = Gravity.CENTER }, lp(12))
         home.addView(
             tv(
                 L.t("Download videos and audio from anywhere", "نزّل الفيديوهات والصوت من أي مكان"),
                 14f, mutedC
-            ), lp(4)
+            ).apply { gravity = Gravity.CENTER }, lp(4)
         )
 
         val row = LinearLayout(this).apply {
@@ -412,7 +418,33 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+    private var breathing: android.animation.ValueAnimator? = null
 
+    private fun playLogoAnimation(v: View) {
+        v.alpha = 0f
+        v.scaleX = 0.6f
+        v.scaleY = 0.6f
+        v.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(650)
+            .setInterpolator(android.view.animation.OvershootInterpolator(1.2f))
+            .withEndAction {
+                breathing = android.animation.ValueAnimator.ofFloat(1f, 1.05f).apply {
+                    duration = 1800
+                    repeatCount = android.animation.ValueAnimator.INFINITE
+                    repeatMode = android.animation.ValueAnimator.REVERSE
+                    addUpdateListener {
+                        val s = it.animatedValue as Float
+                        v.scaleX = s
+                        v.scaleY = s
+                    }
+                    start()
+                }
+            }.start()
+    }
+
+    override fun onDestroy() {
+        breathing?.cancel()
+        super.onDestroy()
+    }
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
 
     private fun openTelegram() {
